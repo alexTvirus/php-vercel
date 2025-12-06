@@ -263,7 +263,7 @@ function makeRequest($url)
 ////            $responseBody = $responseBody;
 //        }
     }
-
+	var_dump(headers_list());die();
     http_response_code($responseCode);
 
     echo $responseBody;
