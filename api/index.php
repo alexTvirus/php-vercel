@@ -79,7 +79,7 @@ $maindomain = $_SERVER['HTTP_HOST'];
 
 $protocol = "https";
 $url = $_SERVER["REQUEST_URI"];
-var_dump($url); die();
+var_dump($_SERVER); die();
 $url = str_replace("api/index.php/", "", $url);
 
 $parts = parse_url($url);
