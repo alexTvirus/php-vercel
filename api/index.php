@@ -1,6 +1,8 @@
 
 <?php
-
+// Tắt hiển thị tất cả các lỗi (errors) và cảnh báo (warnings)
+error_reporting(0);
+ini_set('display_errors', '0');
 // cach su dung : http://localhost/index-web.php/http://abc
 
 //To enable CORS (cross-origin resource sharing) for proxied sites, set $forceCORS to true.
