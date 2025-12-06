@@ -82,9 +82,9 @@ $url = $_SERVER["REQUEST_URI"];
 
 $url = str_replace("/api/index.php/", "", $url);
 $url=normalize_url_scheme($url);
-var_dump($url); 
+
 $parts = parse_url($url);
-var_dump($parts); die();
+
 $maindomain = $parts['host'];
 
 $response = makeRequest($url);
