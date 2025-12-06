@@ -233,7 +233,7 @@ function makeRequest($url)
     curl_close($ch);
 
     $responseHeaders = splitResponseHeaders($responseHeaders);
-
+	$test = "";
     foreach ($responseHeaders as $header) {
         $headerParts = preg_split('/:\s+/', $header, 2);
         if (count($headerParts) !== 2) {
@@ -245,8 +245,10 @@ function makeRequest($url)
 
         $headerValue = $headerParts[1];
         $loweredHeaderValue = strtolower($headerValue);
-		$test = "";
+		
         // Pass following headers to response
+		
+		
         if (in_array($loweredHeaderName,
             ['content-type', 'content-language', 'content-security', 'server'])) {
             header("$headerName: $headerValue");
