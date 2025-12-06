@@ -84,7 +84,7 @@ $url = $_SERVER["REQUEST_URI"];
 
 $url = str_replace("/api/download.php/", "", $url);
 $url=normalize_url_scheme($url);
-var_dump($url);die();
+
 $parts = parse_url($url);
 
 $maindomain = $parts['host'];
