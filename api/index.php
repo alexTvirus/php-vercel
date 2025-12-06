@@ -245,18 +245,21 @@ function makeRequest($url)
 
         $headerValue = $headerParts[1];
         $loweredHeaderValue = strtolower($headerValue);
-
+		$test = "";
         // Pass following headers to response
         if (in_array($loweredHeaderName,
             ['content-type', 'content-language', 'content-security', 'server'])) {
             header("$headerName: $headerValue");
+			$test = $headerName. " " . $headerValue . " " .$test;
         } elseif (strpos($loweredHeaderName, 'x-') === 0) {
             header("$headerName: $headerValue");
+			$test = $headerName. " " . $headerValue . " " .$test;
         } // Replace cookie domain and path
         elseif ($loweredHeaderName === 'set-cookie') {
             $newValue = preg_replace('/((?>domain)\s*=\s*)[^;\s]+/', '\1.' . $maindomain, $headerValue);
             $newValue = preg_replace('/\s*;?\s*path\s*=\s*[^;\s]+/', '', $newValue);
             header("$headerName: $newValue", false);
+			$test = $headerName. " " . $headerValue . " " .$test;
         } // Decode response body if gzip encoding is used
 //        elseif ($loweredHeaderName === 'content-encoding' && $loweredHeaderValue === 'gzip') {
 //            $responseBody = gzdecode($responseBody);
@@ -264,7 +267,7 @@ function makeRequest($url)
 //        }
     }
 	$hit  = headers_list();
-	var_dump($hit);
+	var_dump($test);
 	var_dump($responseHeaders);die();
     http_response_code($responseCode);
 
