@@ -80,7 +80,8 @@ $maindomain = $_SERVER['HTTP_HOST'];
 $protocol = "https";
 $url = $_SERVER["REQUEST_URI"];
 
-$url = str_replace("/api/index.php?", "", $url);
+$url = str_replace("/api/index.php/", "", $url);
+$url=normalize_url_scheme($url);
 var_dump($url); 
 $parts = parse_url($url);
 var_dump($parts); die();
@@ -88,7 +89,26 @@ $maindomain = $parts['host'];
 
 $response = makeRequest($url);
 
+function normalize_url_scheme($url) {
+    /**
+     * Kiểm tra và chuẩn hóa phần giao thức (scheme) của URL.
+     * Nếu là 'http:/' hoặc 'https:/', hàm sẽ sửa thành 'http://' hoặc 'https://'.
+     */
 
+    // Biểu thức chính quy tìm kiếm 'http:/' hoặc 'https:/'
+    // ^(https?:) khớp với 'http:' hoặc 'https:' ở đầu chuỗi (nhóm 1)
+    // /? kiểm tra xem có dấu / theo sau hay không (nếu có 1 dấu / thì match)
+    // (\w+.*) khớp với phần còn lại của URL (nhóm 3)
+    $pattern = "/^(https?):(\/?)(\w+.*)/";
+
+    // Thay thế: Nhóm 1 ($1) là scheme (http: hoặc https:),
+    // chúng ta chèn // vào sau, và giữ lại phần còn lại của URL ($3)
+    // Lưu ý: Trong PHP, các nhóm bắt được tham chiếu bằng $1, $2, v.v.,
+    // thay vì \1, \2 như trong Python.
+    $normalized_url = preg_replace($pattern, "$1://$3", $url);
+
+    return $normalized_url;
+}
 
 //Makes an HTTP request via cURL, using request data that was passed directly to this script.
 function makeRequest($url)
