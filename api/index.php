@@ -1,9 +1,5 @@
-
 <?php
-// Tắt hiển thị tất cả các lỗi (errors) và cảnh báo (warnings)
-error_reporting(0);
-ini_set('display_errors', '0');
-// cach su dung : http://localhost/index-web.php/http://abc
+
 
 //To enable CORS (cross-origin resource sharing) for proxied sites, set $forceCORS to true.
 $forceCORS = false;
@@ -78,39 +74,63 @@ if (!function_exists('getallheaders')) {
 }
 
 $maindomain = $_SERVER['HTTP_HOST'];
-
 $protocol = "https";
 $url = $_SERVER["REQUEST_URI"];
+$url = str_replace("/index.php/", "", $url);
+//var_dump($_SERVER); die();
+if ($_SERVER['HTTP_REALIP']) {
+    $maindomain = $_SERVER['HTTP_REALIP'];
+} 
 
-$url = str_replace("/api/download.php/", "", $url);
-$url=normalize_url_scheme($url);
-
-$parts = parse_url($url);
-
-$maindomain = $parts['host'];
-
-$response = makeRequest($url);
-
-function normalize_url_scheme($url) {
-    /**
-     * Kiểm tra và chuẩn hóa phần giao thức (scheme) của URL.
-     * Nếu là 'http:/' hoặc 'https:/', hàm sẽ sửa thành 'http://' hoặc 'https://'.
-     */
-
-    // Biểu thức chính quy tìm kiếm 'http:/' hoặc 'https:/'
-    // ^(https?:) khớp với 'http:' hoặc 'https:' ở đầu chuỗi (nhóm 1)
-    // /? kiểm tra xem có dấu / theo sau hay không (nếu có 1 dấu / thì match)
-    // (\w+.*) khớp với phần còn lại của URL (nhóm 3)
-    $pattern = "/^(https?):(\/?)(\w+.*)/";
-
-    // Thay thế: Nhóm 1 ($1) là scheme (http: hoặc https:),
-    // chúng ta chèn // vào sau, và giữ lại phần còn lại của URL ($3)
-    // Lưu ý: Trong PHP, các nhóm bắt được tham chiếu bằng $1, $2, v.v.,
-    // thay vì \1, \2 như trong Python.
-    $normalized_url = preg_replace($pattern, "$1://$3", $url);
-
-    return $normalized_url;
+if ($_SERVER['HTTP_REALPROTOCOL']) {
+    $protocol = $_SERVER['HTTP_REALPROTOCOL'];
 }
+
+$url = $protocol."://" . $maindomain . "/" . $url;
+$response = makeRequest($url);
+//$rawResponseHeaders = $response["headers"];
+//$responseBody = $response["body"];
+//$responseInfo = $response["responseInfo"];
+
+
+//A regex that indicates which server response headers should be stripped out of the proxified response.
+$header_blacklist_pattern = "/^content-length|^Content-Length|^Transfer-Encoding|^Content-Encoding.*gzip/i";
+//$header_blacklist_pattern = "/sss/i";
+
+//cURL can make multiple requests internally (for example, if CURLOPT_FOLLOWLOCATION is enabled), and reports
+//headers for every request it makes. Only proxy the last set of received response headers,
+//corresponding to the final request made by cURL for any given call to makeRequest().
+//$responseHeaderBlocks = array_filter(explode("\r\n\r\n", $rawResponseHeaders));
+//$lastHeaderBlock = end($responseHeaderBlocks);
+//$headerLines = explode("\r\n", $lastHeaderBlock);
+
+//var_dump($headerLines);
+//die();
+
+//unset($browserRequestHeaders['accept-encoding']);
+//
+//foreach ($headerLines as $header) {
+//    header($header, true);
+//}
+
+//foreach ($headerLines as $header) {
+//    $header = trim($header);
+//    if (!preg_match($header_blacklist_pattern, $header)) {
+//        header($header, false);
+//    }
+//}
+
+
+//$contentType = "";
+//if (isset($responseInfo["content_type"])) $contentType = $responseInfo["content_type"];
+//
+//if (stripos($contentType, "text/html") !== false && stripos($contentType, "text/css") !== false) {
+//    echo $responseBody;
+//} else {
+////    header("Content-Length: " . strlen($responseBody), true);
+//    echo $responseBody;
+//}
+
 
 //Makes an HTTP request via cURL, using request data that was passed directly to this script.
 function makeRequest($url)
@@ -199,12 +219,7 @@ function makeRequest($url)
 
     //Make the request.
     $response = curl_exec($ch);
-//	$error_number = curl_errno($ch);
-//    $error_message = curl_error($ch);
-    
-//    echo "CURL Error Number: " . $error_number . "\n";
-//    echo "CURL Error Message: " . $error_message . "\n";
-		//var_dump($response); die();
+
     $responseInfo = curl_getinfo($ch);
     $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 
@@ -217,23 +232,23 @@ function makeRequest($url)
 
     $responseCode = ri($responseInfo['http_code'], 500);
     $redirectCount = ri($responseInfo['redirect_count'], 0);
-//    $requestHeaders = preg_split('/[\r\n]+/', ri($responseInfo['request_header'], ''));
+    $requestHeaders = preg_split('/[\r\n]+/', ri($responseInfo['request_header'], ''));
     if ($responseCode === 0) {
         $responseCode = 404;
     }
 
 
-//    $finalRequestURL = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-//    if ($redirectCount > 0 && !empty($finalRequestURL)) {
-//        $finalRequestURLParts = parse_url($finalRequestURL);
-//        $effectiveURL = ri($finalRequestURLParts['scheme'], 'http') . '://' .
-//            ri($finalRequestURLParts['host']) . ri($finalRequestURLParts['path'], '');
-//    }
+    $finalRequestURL = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+    if ($redirectCount > 0 && !empty($finalRequestURL)) {
+        $finalRequestURLParts = parse_url($finalRequestURL);
+        $effectiveURL = ri($finalRequestURLParts['scheme'], 'http') . '://' .
+            ri($finalRequestURLParts['host']) . ri($finalRequestURLParts['path'], '');
+    }
 
     curl_close($ch);
 
     $responseHeaders = splitResponseHeaders($responseHeaders);
-	$test = "";
+
     foreach ($responseHeaders as $header) {
         $headerParts = preg_split('/:\s+/', $header, 2);
         if (count($headerParts) !== 2) {
@@ -245,31 +260,25 @@ function makeRequest($url)
 
         $headerValue = $headerParts[1];
         $loweredHeaderValue = strtolower($headerValue);
-		
+
         // Pass following headers to response
-		
-		  header("$headerName: $headerValue");
         if (in_array($loweredHeaderName,
             ['content-type', 'content-language', 'content-security', 'server'])) {
             header("$headerName: $headerValue");
-		
         } elseif (strpos($loweredHeaderName, 'x-') === 0) {
             header("$headerName: $headerValue");
-			
         } // Replace cookie domain and path
         elseif ($loweredHeaderName === 'set-cookie') {
             $newValue = preg_replace('/((?>domain)\s*=\s*)[^;\s]+/', '\1.' . $maindomain, $headerValue);
             $newValue = preg_replace('/\s*;?\s*path\s*=\s*[^;\s]+/', '', $newValue);
             header("$headerName: $newValue", false);
-	
         } // Decode response body if gzip encoding is used
 //        elseif ($loweredHeaderName === 'content-encoding' && $loweredHeaderValue === 'gzip') {
 //            $responseBody = gzdecode($responseBody);
 ////            $responseBody = $responseBody;
 //        }
     }
-	$hit  = headers_list();
-	
+
     http_response_code($responseCode);
 
     echo $responseBody;
