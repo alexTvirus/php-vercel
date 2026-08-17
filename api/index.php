@@ -1,5 +1,16 @@
 <?php
 
+/**
+ * PHP Proxy
+ *
+ * Cách dùng mới:
+ * Client gửi request tới proxy (ví dụ: https://proxy.example.com/index-web.php)
+ * kèm 2 header:
+ *   real-url-request:  https://target-site.com/path?query=1
+ *   real-domain-request: target-site.com
+ *
+ * Proxy sẽ request tới real-url-request và set Host = real-domain-request
+ */
 
 //To enable CORS (cross-origin resource sharing) for proxied sites, set $forceCORS to true.
 $forceCORS = false;
@@ -73,133 +84,168 @@ if (!function_exists('getallheaders')) {
 
 }
 
-$maindomain = $_SERVER['HTTP_HOST'];
-$protocol = "https";
-$url = $_SERVER["REQUEST_URI"];
-$url = str_replace("/index.php/", "", $url);
-//var_dump($_SERVER); die();
-if ($_SERVER['HTTP_REALIP']) {
-    $maindomain = $_SERVER['HTTP_REALIP'];
-} 
-
-if ($_SERVER['HTTP_REALPROTOCOL']) {
-    $protocol = $_SERVER['HTTP_REALPROTOCOL'];
+/**
+ * Lấy header không phân biệt hoa thường
+ */
+function getHeaderValue($headers, $name)
+{
+    $nameLower = strtolower($name);
+    foreach ($headers as $key => $value) {
+        if (strtolower($key) === $nameLower) {
+            return $value;
+        }
+    }
+    return null;
 }
 
-$url = $protocol."://" . $maindomain . "/" . $url;
-$response = makeRequest($url);
-//$rawResponseHeaders = $response["headers"];
-//$responseBody = $response["body"];
-//$responseInfo = $response["responseInfo"];
+// Lấy toàn bộ header từ client
+$allHeaders = getallheaders();
+
+// Lấy URL và domain từ header (theo yêu cầu mới)
+$url = getHeaderValue($allHeaders, 'real-url-request');
+$maindomain = getHeaderValue($allHeaders, 'real-domain-request');
+
+if (empty($url) || empty($maindomain)) {
+    http_response_code(400);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'error' => true,
+        'message' => 'Missing required headers: real-url-request and/or real-domain-request'
+    ]);
+    exit;
+}
+
+// Validate URL cơ bản
+if (!filter_var($url, FILTER_VALIDATE_URL)) {
+    http_response_code(400);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'error' => true,
+        'message' => 'Invalid real-url-request value'
+    ]);
+    exit;
+}
+
+// (Tùy chọn) Chặn request tới local nếu $disallowLocal = true
+if ($disallowLocal) {
+    $parsed = parse_url($url);
+    $host = isset($parsed['host']) ? strtolower($parsed['host']) : '';
+    if (
+        $host === 'localhost' ||
+        $host === '127.0.0.1' ||
+        $host === '::1' ||
+        preg_match('/^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/', $host)
+    ) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'error' => true,
+            'message' => 'Local/private addresses are not allowed'
+        ]);
+        exit;
+    }
+}
+
+// Thực hiện proxy
+makeRequest($url, $maindomain, $allHeaders);
 
 
-//A regex that indicates which server response headers should be stripped out of the proxified response.
-$header_blacklist_pattern = "/^content-length|^Content-Length|^Transfer-Encoding|^Content-Encoding.*gzip/i";
-//$header_blacklist_pattern = "/sss/i";
-
-//cURL can make multiple requests internally (for example, if CURLOPT_FOLLOWLOCATION is enabled), and reports
-//headers for every request it makes. Only proxy the last set of received response headers,
-//corresponding to the final request made by cURL for any given call to makeRequest().
-//$responseHeaderBlocks = array_filter(explode("\r\n\r\n", $rawResponseHeaders));
-//$lastHeaderBlock = end($responseHeaderBlocks);
-//$headerLines = explode("\r\n", $lastHeaderBlock);
-
-//var_dump($headerLines);
-//die();
-
-//unset($browserRequestHeaders['accept-encoding']);
-//
-//foreach ($headerLines as $header) {
-//    header($header, true);
-//}
-
-//foreach ($headerLines as $header) {
-//    $header = trim($header);
-//    if (!preg_match($header_blacklist_pattern, $header)) {
-//        header($header, false);
-//    }
-//}
-
-
-//$contentType = "";
-//if (isset($responseInfo["content_type"])) $contentType = $responseInfo["content_type"];
-//
-//if (stripos($contentType, "text/html") !== false && stripos($contentType, "text/css") !== false) {
-//    echo $responseBody;
-//} else {
-////    header("Content-Length: " . strlen($responseBody), true);
-//    echo $responseBody;
-//}
-
-
-//Makes an HTTP request via cURL, using request data that was passed directly to this script.
-function makeRequest($url)
+/**
+ * Makes an HTTP request via cURL, using request data that was passed directly to this script.
+ */
+function makeRequest($url, $maindomain, $browserRequestHeaders)
 {
     global $anonymize;
-    global $maindomain;
-    //Tell cURL to make the request using the brower's user-agent if there is one, or a fallback user-agent otherwise.
-    $user_agent = $_SERVER["HTTP_USER_AGENT"];
+
+    // Tell cURL to make the request using the browser's user-agent if there is one, or a fallback user-agent otherwise.
+    $user_agent = isset($_SERVER["HTTP_USER_AGENT"]) ? $_SERVER["HTTP_USER_AGENT"] : "";
     if (empty($user_agent)) {
         $user_agent = "Mozilla/5.0 (compatible; )";
     }
+
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_USERAGENT, $user_agent);
 
-    //Get ready to proxy the browser's request headers...
-    $browserRequestHeaders = getallheaders();
+    // Normalize header keys to lowercase for easier removal
+    $headersLower = [];
+    foreach ($browserRequestHeaders as $name => $value) {
+        $headersLower[strtolower($name)] = $value;
+    }
 
-    $removedHeaders = array_map("strtolower", $browserRequestHeaders);
+    // Headers cần loại bỏ (không forward sang target)
+    $headersToRemove = [
+        'host',
+        'content-length',
+        'accept-encoding',
+        'real-url-request',      // header custom của proxy
+        'real-domain-request',   // header custom của proxy
+        'connection',
+        'keep-alive',
+        'proxy-connection',
+        'transfer-encoding',
+    ];
 
-    curl_setopt($ch, CURLOPT_ENCODING, "");
-    //Transform the associative array from getallheaders() into an
-    //indexed array of header strings to be passed to cURL.
     $curlRequestHeaders = [];
 
-
-    //Proxy any received GET/POST/PUT data.
+    // Proxy any received GET/POST/PUT data.
     switch ($_SERVER["REQUEST_METHOD"]) {
         case "POST":
             $postData = file_get_contents("php://input");
-            if ($postData) {
+            if ($postData !== false && $postData !== '') {
+                // Có raw body (JSON, XML, form-urlencoded, multipart thật...)
+                curl_setopt($ch, CURLOPT_POST, true);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
             } else {
-                unset($browserRequestHeaders['content-type']);
-                unset($browserRequestHeaders['Content-Type']);
+                // Fallback: build multipart từ $_POST (chỉ text fields)
+                unset($headersLower['content-type']);
                 $postData = postFile();
                 $curlRequestHeaders[] = "Content-Type: multipart/form-data; boundary=----WebKitFormBoundary26CIPAAFxqygqxTa";
+                curl_setopt($ch, CURLOPT_POST, true);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
             }
-
             break;
+
         case "PUT":
-            curl_setopt($ch, CURLOPT_PUT, true);
-            curl_setopt($ch, CURLOPT_INFILE, fopen("php://input", "r"));
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
+            $putData = file_get_contents("php://input");
+            if ($putData !== false) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $putData);
+            }
+            break;
+
+        case "PATCH":
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PATCH");
+            $patchData = file_get_contents("php://input");
+            if ($patchData !== false) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $patchData);
+            }
+            break;
+
+        case "DELETE":
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
             break;
     }
 
-    unset($browserRequestHeaders['Host']);
-    unset($browserRequestHeaders['host']);
-    unset($browserRequestHeaders['Content-Length']);
-    unset($browserRequestHeaders['content-length']);
-    unset($browserRequestHeaders['Accept-Encoding']);
-    unset($browserRequestHeaders['accept-encoding']);
-    unset($browserRequestHeaders['Accept-Encoding']);
-
-
+    // Build header list để gửi sang target
     foreach ($browserRequestHeaders as $name => $value) {
+        $lowerName = strtolower($name);
+        if (in_array($lowerName, $headersToRemove, true)) {
+            continue;
+        }
         $curlRequestHeaders[] = $name . ": " . $value;
     }
 
-    if (in_array("origin", $removedHeaders)) {
+    // Xử lý Origin nếu client gửi
+    if (isset($headersLower['origin'])) {
         $urlParts = parse_url($url);
-        $port = $urlParts["port"];
-        unset($browserRequestHeaders['Origin']);
-        unset($browserRequestHeaders['origin']);
-        $curlRequestHeaders[] = "Origin: " . $urlParts["scheme"] . "://" . $urlParts["host"] . (empty($port) ? "" : ":" . $port);
-    };
+        $port = isset($urlParts["port"]) ? $urlParts["port"] : null;
+        $origin = $urlParts["scheme"] . "://" . $urlParts["host"] . (empty($port) ? "" : ":" . $port);
+        // Ghi đè Origin bằng origin của target
+        $curlRequestHeaders[] = "Origin: " . $origin;
+    }
 
+    // Bắt buộc set Host theo real-domain-request
     $curlRequestHeaders[] = 'Host: ' . $maindomain;
-
 
     if (!$anonymize) {
         $curlRequestHeaders[] = "X-Forwarded-For: " . $_SERVER["REMOTE_ADDR"];
@@ -207,42 +253,42 @@ function makeRequest($url)
 
     curl_setopt($ch, CURLOPT_HTTPHEADER, $curlRequestHeaders);
 
-    //Other cURL options.
+    // Other cURL options
     curl_setopt($ch, CURLOPT_HEADER, true);
-    //curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    // curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true); // bật nếu muốn follow redirect
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_ENCODING, "");
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt($ch, CURLOPT_ENCODING, ""); // tự decompress
 
-    //Set the request URL.
+    // Set the request URL
     curl_setopt($ch, CURLOPT_URL, $url);
 
-    //Make the request.
+    // Make the request
     $response = curl_exec($ch);
+
+    if ($response === false) {
+        $error = curl_error($ch);
+        curl_close($ch);
+        http_response_code(502);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'error' => true,
+            'message' => 'cURL error: ' . $error
+        ]);
+        exit;
+    }
 
     $responseInfo = curl_getinfo($ch);
     $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 
-
-    //Setting CURLOPT_HEADER to true above forces the response headers and body
-    //to be output together--separate them.
+    // Separate headers and body
     $responseHeaders = substr($response, 0, $headerSize);
     $responseBody = substr($response, $headerSize);
 
-
     $responseCode = ri($responseInfo['http_code'], 500);
-    $redirectCount = ri($responseInfo['redirect_count'], 0);
-    $requestHeaders = preg_split('/[\r\n]+/', ri($responseInfo['request_header'], ''));
     if ($responseCode === 0) {
         $responseCode = 404;
-    }
-
-
-    $finalRequestURL = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-    if ($redirectCount > 0 && !empty($finalRequestURL)) {
-        $finalRequestURLParts = parse_url($finalRequestURL);
-        $effectiveURL = ri($finalRequestURLParts['scheme'], 'http') . '://' .
-            ri($finalRequestURLParts['host']) . ri($finalRequestURLParts['path'], '');
     }
 
     curl_close($ch);
@@ -252,37 +298,41 @@ function makeRequest($url)
     foreach ($responseHeaders as $header) {
         $headerParts = preg_split('/:\s+/', $header, 2);
         if (count($headerParts) !== 2) {
-            throw new RuntimeException("Can not parse header \"$header\"");
+            // Có thể là status line hoặc dòng rỗng → bỏ qua
+            continue;
         }
 
         $headerName = $headerParts[0];
         $loweredHeaderName = strtolower($headerName);
-
         $headerValue = $headerParts[1];
-        $loweredHeaderValue = strtolower($headerValue);
 
         // Pass following headers to response
-        if (in_array($loweredHeaderName,
-            ['content-type', 'content-language', 'content-security', 'server'])) {
+        if (in_array($loweredHeaderName, [
+            'content-type',
+            'content-language',
+            'content-security',
+            'server',
+            'cache-control',
+            'expires',
+            'pragma',
+            'etag',
+            'last-modified',
+        ], true)) {
             header("$headerName: $headerValue");
         } elseif (strpos($loweredHeaderName, 'x-') === 0) {
             header("$headerName: $headerValue");
-        } // Replace cookie domain and path
+        }
+        // Replace cookie domain and path
         elseif ($loweredHeaderName === 'set-cookie') {
-            $newValue = preg_replace('/((?>domain)\s*=\s*)[^;\s]+/', '\1.' . $maindomain, $headerValue);
-            $newValue = preg_replace('/\s*;?\s*path\s*=\s*[^;\s]+/', '', $newValue);
+            // Thay domain cookie thành domain của proxy (hoặc để nguyên tùy nhu cầu)
+            $newValue = preg_replace('/((?>domain)\s*=\s*)[^;\s]+/i', '\1.' . $maindomain, $headerValue);
+            $newValue = preg_replace('/\s*;?\s*path\s*=\s*[^;\s]+/i', '', $newValue);
             header("$headerName: $newValue", false);
-        } // Decode response body if gzip encoding is used
-//        elseif ($loweredHeaderName === 'content-encoding' && $loweredHeaderValue === 'gzip') {
-//            $responseBody = gzdecode($responseBody);
-////            $responseBody = $responseBody;
-//        }
+        }
     }
 
     http_response_code($responseCode);
-
     echo $responseBody;
-//    return ["headers" => $responseHeaders, "body" => $responseBody, "responseInfo" => $responseInfo];
 }
 
 function splitResponseHeaders($headerString)
@@ -296,12 +346,12 @@ function splitResponseHeaders($headerString)
 
         // Header contains HTTP version specification and path
         if (strpos($headerLine, 'HTTP/') === 0) {
-            // Reset the output array as there may by multiple response headers
+            // Reset the output array as there may be multiple response headers
             $results = [];
             continue;
         }
 
-        $results[] = "$headerLine";
+        $results[] = $headerLine;
     }
 
     return $results;
@@ -311,12 +361,13 @@ function ri(&$variable, $default = null)
 {
     if (isset($variable)) {
         return $variable;
-    } else {
-        return $default;
     }
+    return $default;
 }
 
-//Helper function used to removes/unset keys from an associative array using case insensitive matching
+/**
+ * Helper function used to remove/unset keys from an associative array using case insensitive matching
+ */
 function removeKeys(&$assoc, $keys2remove)
 {
     $keys = array_keys($assoc);
@@ -337,14 +388,16 @@ function removeKeys(&$assoc, $keys2remove)
 
 function postFile()
 {
-    $eol = "\r\n"; //default line-break for mime type
-    $BODY = ""; //init my curl body
+    $eol = "\r\n";
+    $boundary = '----WebKitFormBoundary26CIPAAFxqygqxTa';
+    $BODY = "";
+
     foreach ($_POST as $key => $value) {
-        $BODY .= '------WebKitFormBoundary26CIPAAFxqygqxTa' . $eol; //start param header
-        $BODY .= 'Content-Disposition: form-data; name="' . $key . '"' . $eol . $eol; // last Content with 2 $eol, in this case is only 1 content.
-        $BODY .= $value . $eol;//param data in this case is a simple post data and 1 $eol for the end of the data
+        $BODY .= '--' . $boundary . $eol;
+        $BODY .= 'Content-Disposition: form-data; name="' . $key . '"' . $eol . $eol;
+        $BODY .= $value . $eol;
     }
-    $BODY .= '------WebKitFormBoundary26CIPAAFxqygqxTa--'; // we close the param and the post width "--" and 2 $eol at the end of our boundary header.
+    $BODY .= '--' . $boundary . '--' . $eol;
 
     return $BODY;
 }
