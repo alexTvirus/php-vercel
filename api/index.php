@@ -116,11 +116,6 @@ if (empty($url)) {
 }
 if (empty($maindomain)) {
     $maindomain = parse_url($url, PHP_URL_HOST);
-    echo json_encode([
-        'error' => true,
-        'message' => $maindomain
-    ]);
-    exit;
 }
 
 // Validate URL cơ bản
