@@ -105,7 +105,7 @@ $allHeaders = getallheaders();
 $url = getHeaderValue($allHeaders, 'real-url-request');
 $maindomain = getHeaderValue($allHeaders, 'real-domain-request');
 
-if (empty($url) || empty($maindomain)) {
+if (empty($url)) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
@@ -113,6 +113,9 @@ if (empty($url) || empty($maindomain)) {
         'message' => 'Missing required headers: real-url-request and/or real-domain-request'
     ]);
     exit;
+}
+if (empty($maindomain)) {
+    $maindomain = parse_url($url, PHP_URL_HOST);
 }
 
 // Validate URL cơ bản
